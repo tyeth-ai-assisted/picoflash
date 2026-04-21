@@ -121,17 +121,42 @@ export class Picoboot {
      * @param {Object} [timeouts]
      * @returns {Promise<Picoboot>}
      */
+    /**
+     * Returns a USB API object.  Uses navigator.usb when available (Chrome/Edge).
+     * Falls back to a compatibility shim over navigator.serial for browsers such
+     * as Firefox Nightly that expose Web Serial but not WebUSB.
+     * Returns null if neither API is present.
+     *
+     * @returns {object|null}
+     */
+    static getUsbApi() {
+        if ('usb' in navigator) {
+            return navigator.usb;
+        }
+        if ('serial' in navigator) {
+            console.warn('navigator.usb unavailable; using navigator.serial compatibility shim (Firefox Nightly)');
+            return {
+                // Map WebUSB requestDevice() to Web Serial requestPort()
+                requestDevice: async (options) => {
+                    const serialFilters = (options?.filters ?? []).map(f => ({
+                        usbVendorId: f.vendorId,
+                        ...(f.productId !== undefined ? { usbProductId: f.productId } : {}),
+                    }));
+                    return await navigator.serial.requestPort({ filters: serialFilters });
+                },
+                // Map WebUSB getDevices() to Web Serial getPorts()
+                getDevices: async () => {
+                    return await navigator.serial.getPorts();
+                },
+            };
+        }
+        return null;
+    }
+
     static async requestDevice(targets, timeouts) {
-        if (!('usb' in navigator)) {
-            // navigator.usb not detected (e.g. Firefox Nightly with Web Serial).
-            // Log a warning and proceed — the browser may handle the request, or
-            // a clearer error will surface from the actual API call.
-            console.warn(
-                'navigator.usb not detected; attempting WebUSB anyway. ' +
-                (('serial' in navigator)
-                    ? 'Web Serial is available (Firefox Nightly) — WebUSB may also work.'
-                    : 'Neither WebUSB nor Web Serial detected in this browser.')
-            );
+        const usbApi = Picoboot.getUsbApi();
+        if (!usbApi) {
+            throw new UsbError('WebUSB and Web Serial are both unsupported by this browser', null);
         }
 
         const filters = [];
@@ -151,8 +176,8 @@ export class Picoboot {
         console.log('Requesting USB device from user');
 
         try {
-            const device = await navigator.usb.requestDevice({ filters });
-            console.log(`User selected device: VID=${device.vendorId.toString(16)}, PID=${device.productId.toString(16)}`);
+            const device = await usbApi.requestDevice({ filters });
+            console.log(`User selected device: VID=${device.vendorId?.toString(16) ?? '?'}, PID=${device.productId?.toString(16) ?? '?'}`);
             return await Picoboot.fromDevice(device, timeouts);
         } catch (e) {
             if (e.name === 'NotFoundError') {
@@ -168,6 +193,11 @@ export class Picoboot {
      * @returns {Promise<Array<Picoboot>>}
      */
     static async getDevices(targets, timeouts) {
+        const usbApi = Picoboot.getUsbApi();
+        if (!usbApi) {
+            throw new UsbError('WebUSB and Web Serial are both unsupported by this browser', null);
+        }
+
         const filters = [];
         
         if (targets && targets.length > 0) {
@@ -185,7 +215,7 @@ export class Picoboot {
         console.log('Getting paired USB devices');
         
         try {
-            const devices = await navigator.usb.getDevices();
+            const devices = await usbApi.getDevices();
             const picobootDevices = [];
             
             for (const device of devices) {
