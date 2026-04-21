@@ -40,6 +40,11 @@ let picoboot = /** @type {Picoboot} */ (null);
 let connection = /** @type {Connection} */ (null);
 let lastStatus = /** @type {string} */ (null);
 
+// Web Serial (Firefox Nightly)
+let serialPort = /** @type {SerialPort|null} */ (null);
+const connectSerialBtn = /** @type {HTMLButtonElement} */ (document.getElementById('connectSerialBtn'));
+const browserWarning = /** @type {HTMLElement} */ (document.getElementById('browserWarning'));
+
 // Speeds and timeouts
 const FLASH_SPEED = 80 * 1024; // 80KB/s
 const READ_SPEED = 360 * 1024; // 400KB/s
@@ -135,6 +140,25 @@ function startup() {
 
     // Log that we're loaded
     logActivity('pico⚡flash loaded', 'info');
+
+    // Show/hide buttons based on browser API availability
+    const hasWebUsb = 'usb' in navigator;
+    const hasWebSerial = 'serial' in navigator;
+
+    if (!hasWebUsb) {
+        connectBtn.style.display = 'none';
+    }
+    if (!hasWebSerial) {
+        connectSerialBtn.style.display = 'none';
+    }
+    if (!hasWebUsb && !hasWebSerial) {
+        browserWarning.textContent = '⚠ This browser supports neither WebUSB nor Web Serial. Use Chrome, Edge, or Firefox Nightly.';
+        browserWarning.classList.remove('hidden');
+    } else if (!hasWebUsb && hasWebSerial) {
+        browserWarning.textContent = '🦊 Firefox detected — Web Serial mode only. Connect a Pico running CircuitPython/MicroPython firmware.';
+        browserWarning.classList.remove('hidden');
+        logActivity('Firefox mode: WebUSB unavailable, Web Serial ready', 'info');
+    }
 
     // Update the UI
     updateUi();
@@ -980,6 +1004,89 @@ connectBtn.addEventListener('click', async () => {
 
     updateUi();
 });
+
+// Web Serial connect/disconnect
+connectSerialBtn.addEventListener('click', async () => {
+    if (serialPort) {
+        await disconnectSerial();
+    } else {
+        await connectSerial();
+    }
+    updateSerialBtn();
+});
+
+/**
+ * Updates the Connect Serial button label based on serial connection state.
+ * @return {void}
+ */
+function updateSerialBtn() {
+    if (serialPort) {
+        connectSerialBtn.textContent = 'Disconnect Serial';
+        connectSerialBtn.classList.add('connected');
+    } else {
+        connectSerialBtn.textContent = 'Connect Serial';
+        connectSerialBtn.classList.remove('connected');
+    }
+}
+
+/**
+ * Opens a Web Serial connection to a Pico running firmware.
+ * This path is used in browsers that support navigator.serial but not navigator.usb
+ * (e.g. Firefox Nightly).
+ * @return {Promise<void>}
+ */
+async function connectSerial() {
+    if (!('serial' in navigator)) {
+        logActivity('Error: Web Serial is not supported by this browser', 'error');
+        updateStatus('Browser not supported');
+        return;
+    }
+
+    updateStatus('Connecting (Serial)');
+    try {
+        // Prompt the user to select a serial port (Pico running firmware)
+        const port = await navigator.serial.requestPort({
+            filters: [
+                { usbVendorId: 0x239a }, // Adafruit / CircuitPython
+                { usbVendorId: 0x2e8a }, // Raspberry Pi (MicroPython)
+            ]
+        });
+
+        await port.open({ baudRate: 115200 });
+        serialPort = port;
+
+        const info = port.getInfo();
+        const vid = info.usbVendorId ? info.usbVendorId.toString(16).padStart(4, '0') : '?';
+        const pid = info.usbProductId ? info.usbProductId.toString(16).padStart(4, '0') : '?';
+        logActivity(`Serial port opened: ${vid}:${pid} @ 115200 baud`, 'success');
+        updateStatus('Serial Connected');
+    } catch (e) {
+        if (e.name === 'NotFoundError' || e.message.includes('cancelled') || e.message.includes('No port')) {
+            logActivity('Serial port selection cancelled', 'info');
+        } else {
+            logActivity(`Serial connect error: ${e.message}`, 'error');
+        }
+        serialPort = null;
+        updateStatus('No device');
+    }
+}
+
+/**
+ * Closes the active Web Serial connection.
+ * @return {Promise<void>}
+ */
+async function disconnectSerial() {
+    if (!serialPort) return;
+    try {
+        await serialPort.close();
+        logActivity('Serial port closed', 'success');
+    } catch (e) {
+        logActivity(`Serial disconnect error: ${e.message}`, 'error');
+    } finally {
+        serialPort = null;
+        updateStatus('Disconnected');
+    }
+}
 
 rebootBtn.addEventListener('click', async () => {
     await rebootNormal();
