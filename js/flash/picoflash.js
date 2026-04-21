@@ -6,10 +6,10 @@
 // Imports
 //
 
-import { Picoboot } from '/pkg/picoboot.js';
-import { Connection } from '/pkg/connection.js';
-import { uf2ToFlashBuffer } from '/js/uf2/uf2.js';
-import { PicobootStatusCmd } from '/pkg/commands.js';
+import { Picoboot } from '../../pkg/picoboot.js';
+import { Connection } from '../../pkg/connection.js';
+import { uf2ToFlashBuffer } from '../uf2/uf2.js';
+import { PicobootStatusCmd } from '../../pkg/commands.js';
 
 //
 // Type definitions
