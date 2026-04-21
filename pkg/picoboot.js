@@ -16,6 +16,111 @@ import {
     DEFAULT_RESET_TIMEOUT,
 } from './constants.js';
 
+/**
+ * Wraps a Web Serial SerialPort to present a USBDevice-compatible interface.
+ * This allows the picoboot code to work transparently with Web Serial on
+ * browsers such as Firefox Nightly that expose navigator.serial but not
+ * navigator.usb.
+ *
+ * Note: the picoboot binary protocol is sent as raw bytes over the serial
+ * stream just as it would be over USB bulk endpoints.
+ */
+class SerialPortWrapper {
+    /**
+     * @param {SerialPort} port
+     */
+    constructor(port) {
+        this._port = port;
+        const info = port.getInfo();
+        this.vendorId = info.usbVendorId ?? 0;
+        this.productId = info.usbProductId ?? 0;
+        this.productName = 'Serial Port (picoboot shim)';
+        this.manufacturerName = 'Web Serial';
+        this.serialNumber = null;
+        this._opened = false;
+        this._reader = null;
+        this._readBuffer = new Uint8Array(0);
+
+        // Present a fake USBDevice configuration that matches the picoboot
+        // interface layout so that fromDevice() can find the interface.
+        this.configurations = [{
+            configurationValue: 1,
+            interfaces: [{
+                interfaceNumber: 0,
+                alternates: [{
+                    interfaceClass: 0xFF,    // PICOBOOT_USB_CLASS
+                    interfaceSubclass: 0x00, // PICOBOOT_USB_SUBCLASS
+                    endpoints: [
+                        { type: 'bulk', direction: 'in',  endpointNumber: 1, packetSize: 64 },
+                        { type: 'bulk', direction: 'out', endpointNumber: 2, packetSize: 64 },
+                    ],
+                }],
+            }],
+        }];
+    }
+
+    get opened() { return this._opened; }
+
+    async open() {
+        if (!this._opened) {
+            await this._port.open({ baudRate: 115200 });
+            this._opened = true;
+        }
+    }
+
+    async selectConfiguration(_value) { /* noop — no USB configuration stage needed */ }
+
+    async claimInterface(_ifNum) { /* noop — serial ports don't have interface claiming */ }
+
+    async releaseInterface(_ifNum) { /* noop */ }
+
+    /**
+     * Write data to the serial port (emulates USB bulk OUT).
+     * @param {number} _endpoint
+     * @param {BufferSource} data
+     * @returns {Promise<{status: string, bytesWritten: number}>}
+     */
+    async transferOut(_endpoint, data) {
+        const writer = this._port.writable.getWriter();
+        try {
+            const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+            await writer.write(bytes);
+            return { status: 'ok', bytesWritten: bytes.byteLength };
+        } finally {
+            writer.releaseLock();
+        }
+    }
+
+    /**
+     * Read data from the serial port (emulates USB bulk IN).
+     * @param {number} _endpoint
+     * @param {number} length
+     * @returns {Promise<{status: string, data: DataView}>}
+     */
+    async transferIn(_endpoint, length) {
+        const reader = this._port.readable.getReader();
+        const chunks = [];
+        let total = 0;
+        try {
+            while (total < length) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                total += value.byteLength;
+            }
+        } finally {
+            reader.releaseLock();
+        }
+        const result = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            result.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return { status: 'ok', data: new DataView(result.buffer) };
+    }
+}
+
 export class Picoboot {
     /**
      * @param {USBDevice} device
@@ -134,19 +239,26 @@ export class Picoboot {
             return navigator.usb;
         }
         if ('serial' in navigator) {
-            console.warn('navigator.usb unavailable; using navigator.serial compatibility shim (Firefox Nightly)');
+            // Firefox Nightly: use Web Serial as a drop-in shim for WebUSB.
+            // A module-level cache avoids re-showing the port picker on every
+            // subsequent operation after the user has already selected a port.
             return {
-                // Map WebUSB requestDevice() to Web Serial requestPort()
-                requestDevice: async (options) => {
-                    const serialFilters = (options?.filters ?? []).map(f => ({
-                        usbVendorId: f.vendorId,
-                        ...(f.productId !== undefined ? { usbProductId: f.productId } : {}),
-                    }));
-                    return await navigator.serial.requestPort({ filters: serialFilters });
+                requestDevice: async (_options) => {
+                    // Prefer an already-granted port to avoid repeated dialogs.
+                    const ports = await navigator.serial.getPorts();
+                    if (ports.length > 0) {
+                        console.log('Web Serial: reusing previously granted port');
+                        return new SerialPortWrapper(ports[0]);
+                    }
+                    // No VID:PID filter — BOOTSEL-mode Pico is not a CDC serial
+                    // device and would not match picoboot PIDs in the serial picker.
+                    console.warn('Web Serial: prompting user to select a port');
+                    const port = await navigator.serial.requestPort({});
+                    return new SerialPortWrapper(port);
                 },
-                // Map WebUSB getDevices() to Web Serial getPorts()
                 getDevices: async () => {
-                    return await navigator.serial.getPorts();
+                    const ports = await navigator.serial.getPorts();
+                    return ports.map(p => new SerialPortWrapper(p));
                 },
             };
         }
