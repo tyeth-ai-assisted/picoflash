@@ -123,6 +123,14 @@ export class Picoboot {
      */
     static async requestDevice(targets, timeouts) {
         if (!('usb' in navigator)) {
+            if ('serial' in navigator) {
+                throw new UsbError(
+                    'WebUSB is not supported in this browser. ' +
+                    'Web Serial is available — use the "Connect Serial" button to connect a Pico ' +
+                    'running CircuitPython or MicroPython firmware.',
+                    null
+                );
+            }
             throw new UsbError('WebUSB is not supported by this browser', null);
         }
 

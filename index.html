@@ -39,7 +39,9 @@
         <section class="connection">
             <div class="connection-row">
                 <div class="connection-controls">
-                    <button id="connectBtn" class="btn btn-primary" data-tooltip="Connect to an RP-based device">Connect</button>
+                    <button id="connectBtn" class="btn btn-primary" data-tooltip="Connect to a Pico in BOOTSEL mode via WebUSB (Chrome/Edge)">Connect</button>
+                    <button id="connectSerialBtn" class="btn btn-serial" data-tooltip="Connect to a Pico running CircuitPython/MicroPython via Web Serial (Firefox Nightly)">Connect Serial</button>
+                    <span id="browserWarning" class="browser-warning hidden"></span>
                 </div>
             </div>
 
