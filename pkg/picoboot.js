@@ -123,15 +123,15 @@ export class Picoboot {
      */
     static async requestDevice(targets, timeouts) {
         if (!('usb' in navigator)) {
-            if ('serial' in navigator) {
-                throw new UsbError(
-                    'WebUSB is not supported in this browser. ' +
-                    'Web Serial is available — use the "Connect Serial" button to connect a Pico ' +
-                    'running CircuitPython or MicroPython firmware.',
-                    null
-                );
-            }
-            throw new UsbError('WebUSB is not supported by this browser', null);
+            // navigator.usb not detected (e.g. Firefox Nightly with Web Serial).
+            // Log a warning and proceed — the browser may handle the request, or
+            // a clearer error will surface from the actual API call.
+            console.warn(
+                'navigator.usb not detected; attempting WebUSB anyway. ' +
+                (('serial' in navigator)
+                    ? 'Web Serial is available (Firefox Nightly) — WebUSB may also work.'
+                    : 'Neither WebUSB nor Web Serial detected in this browser.')
+            );
         }
 
         const filters = [];
